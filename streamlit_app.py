@@ -1,117 +1,192 @@
+
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 from pathlib import Path
 
-st.set_page_config(page_title='Customer Segmentation Dashboard', page_icon='📊', layout='wide')
-BASE = Path(__file__).resolve().parent
+st.set_page_config(
+    page_title="Customer Segmentation Dashboard",
+    page_icon="👥",
+    layout="wide"
+)
 
-st.markdown('''<style>
-.main {background:#f6f8fc}
-[data-testid="stMetric"] {background:white;border:1px solid #e5eaf5;padding:16px;border-radius:14px}
-h1,h2,h3 {color:#172b4d}
-</style>''', unsafe_allow_html=True)
+st.title("👥 Customer Segmentation Dashboard")
+st.caption("Explore customer groups, purchasing behavior, and spending patterns.")
 
-@st.cache_data
-def load_data():
-    path = BASE / 'outputs' / 'customer_segments.csv'
-    if not path.exists():
-        path = BASE / 'data' / 'customers.csv'
-    df = pd.read_csv(path)
-    rename = {}
-    for col in df.columns:
-        key = col.lower().replace('_','').replace(' ','')
-        if key in ('customerid','customer','id'): rename[col] = 'CustomerID'
-        elif key == 'age': rename[col] = 'Age'
-        elif key in ('annualincome','annualincomekusd','income'): rename[col] = 'AnnualIncome'
-        elif key in ('spendingscore','spending'): rename[col] = 'SpendingScore'
-        elif key in ('purchases','purchasecount'): rename[col] = 'Purchases'
-        elif key in ('cluster','segment'): rename[col] = 'Cluster'
-    return df.rename(columns=rename)
+# Find CSV files whether they are in the root folder or subfolders.
+def find_csv(filename, alternatives=None):
+    alternatives = alternatives or []
+    paths = [filename] + alternatives
 
-df = load_data()
-if 'Cluster' not in df.columns:
-    st.error('Cluster column is missing. First run: py customer_segmentation.py')
+    for path in paths:
+        if Path(path).is_file():
+            return pd.read_csv(path)
+
+    return None
+
+
+# Load customer data
+customers = find_csv(
+    "customers.csv",
+    ["data/customers.csv"]
+)
+
+segments = find_csv(
+    "customer_segments.csv",
+    ["outputs/customer_segments.csv"]
+)
+
+summary = find_csv(
+    "segment_summary.csv",
+    ["outputs/segment_summary.csv"]
+)
+
+if customers is None and segments is None:
+    st.error(
+        "Customer data was not found. "
+        "Please check that customers.csv or customer_segments.csv "
+        "is uploaded to your GitHub repository."
+    )
     st.stop()
-for col in ['CustomerID','Age','AnnualIncome','SpendingScore']:
-    if col not in df.columns:
-        st.error(f'Missing expected column: {col}. Check your dataset.')
-        st.stop()
-if 'Purchases' not in df.columns: df['Purchases'] = np.nan
 
-df['Cluster'] = df['Cluster'].astype(str)
-clusters = sorted(df['Cluster'].unique(), key=lambda x: int(x) if x.isdigit() else x)
-st.sidebar.title('📊 Customer Insights')
-st.sidebar.caption('Python • Machine Learning • K-Means')
-page = st.sidebar.radio('Navigate', ['Overview','Customer Segments','Detailed Data','Insights & Recommendations'])
-selected = st.sidebar.multiselect('Filter customer groups', clusters, default=clusters)
-d = df[df['Cluster'].isin(selected)].copy()
-st.title('Customer Segmentation Dashboard')
-st.write('Understand customer groups. Discover patterns. Make smarter decisions.')
-
-if page == 'Overview':
-    a,b,c,e = st.columns(4)
-    a.metric('Total customers', f'{len(d):,}')
-    b.metric('Customer segments', f'{d.Cluster.nunique():,}')
-    c.metric('Average annual income', f'{d.AnnualIncome.mean():,.1f}')
-    e.metric('Average spending score', f'{d.SpendingScore.mean():.1f}')
-    left,right = st.columns([1.2,1])
-    with left:
-        st.subheader('Customer groups')
-        fig = px.scatter(d, x='AnnualIncome', y='SpendingScore', color='Cluster', hover_data=['CustomerID','Age','Purchases'], template='plotly_white', labels={'AnnualIncome':'Annual income (dataset units)','SpendingScore':'Spending score'})
-        fig.update_layout(height=420, legend_title='Cluster')
-        st.plotly_chart(fig, use_container_width=True)
-    with right:
-        st.subheader('Customers in each segment')
-        counts = d.Cluster.value_counts().sort_index().rename_axis('Cluster').reset_index(name='Customers')
-        fig = px.bar(counts, x='Cluster', y='Customers', color='Cluster', text='Customers', template='plotly_white')
-        fig.update_layout(height=420, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-    st.subheader('Segment profile')
-    cols = [x for x in ['Age','AnnualIncome','SpendingScore','Purchases'] if x in d.columns]
-    st.dataframe(d.groupby('Cluster')[cols].mean().round(2), use_container_width=True)
-elif page == 'Customer Segments':
-    st.subheader('Explore a customer segment')
-    if d.empty: st.info('Choose at least one group in the sidebar.')
-    else:
-        chosen = st.selectbox('Select cluster', sorted(d.Cluster.unique()))
-        group = d[d.Cluster == chosen]
-        a,b,c = st.columns(3)
-        a.metric('Customers in group', len(group))
-        b.metric('Average age', f'{group.Age.mean():.1f}')
-        c.metric('Average spending score', f'{group.SpendingScore.mean():.1f}')
-        st.write('Customer records')
-        st.dataframe(group, use_container_width=True, hide_index=True)
-elif page == 'Detailed Data':
-    st.subheader('Search and inspect customer records')
-    query = st.text_input('Search by customer ID or any value')
-    view = d.copy()
-    if query:
-        mask = view.astype(str).apply(lambda col: col.str.contains(query, case=False, na=False)).any(axis=1)
-        view = view[mask]
-    st.caption(f'Showing {len(view)} of {len(d)} customers')
-    st.dataframe(view, use_container_width=True, hide_index=True)
-    st.download_button('⬇️ Download filtered data (CSV)', view.to_csv(index=False).encode('utf-8'), 'filtered_customer_segments.csv', 'text/csv')
+# Prefer segmented data if it already contains cluster assignments.
+if segments is not None:
+    df = segments.copy()
 else:
-    st.subheader('Insights & recommendations')
-    if d.empty: st.info('Choose at least one group in the sidebar.')
-    else:
-        profile = d.groupby('Cluster').agg(Customers=('CustomerID','count'), AvgAge=('Age','mean'), AvgIncome=('AnnualIncome','mean'), AvgSpend=('SpendingScore','mean')).round(1)
-        income_avg, spend_avg = d.AnnualIncome.mean(), d.SpendingScore.mean()
-        for cluster,row in profile.iterrows():
-            if row.AvgIncome >= income_avg and row.AvgSpend >= spend_avg:
-                label, advice = 'Higher income + higher spending', 'Consider loyalty rewards and relevant premium offers.'
-            elif row.AvgSpend >= spend_avg:
-                label, advice = 'Higher spending', 'Test relevant product recommendations and engagement campaigns.'
-            elif row.AvgIncome >= income_avg:
-                label, advice = 'Higher income + lower spending', 'Explore product fit and customer feedback before offering discounts.'
-            else:
-                label, advice = 'Lower income + lower spending', 'Test affordable bundles and introductory offers, then measure results.'
-            with st.container(border=True):
-                st.markdown(f'**Cluster {cluster} — {label}**')
-                st.write(f'{int(row.Customers)} customers • Average age {row.AvgAge} • Average income {row.AvgIncome}')
-                st.write(advice)
-        st.info('Recommendations are hypotheses based on group averages, not guaranteed outcomes. Validate them with real customer research.')
+    df = customers.copy()
+
+# Standardize common column names.
+rename_map = {
+    "AnnualIncome_kUSD": "AnnualIncome",
+    "Annual Income (k$)": "AnnualIncome",
+    "Spending Score (1-100)": "SpendingScore",
+    "Annual Purchases": "AnnualPurchases",
+    "Cluster": "Segment"
+}
+df = df.rename(columns=rename_map)
+
+# If no segment labels exist, explain that clustering is not included.
+segment_column = next(
+    (col for col in ["Segment", "Cluster", "cluster", "Labels"]
+     if col in df.columns),
+    None
+)
+
+if segment_column is None:
+    st.info(
+        "Your customer dataset is loaded, but it has no cluster labels yet. "
+        "Run the clustering script to generate customer segments."
+    )
+
+# Numeric columns used for analysis.
+numeric_columns = df.select_dtypes(include="number").columns.tolist()
+
+# Sidebar filters
+st.sidebar.header("Dashboard Filters")
+if segment_column:
+    segment_values = sorted(df[segment_column].dropna().unique().tolist(),
+                            key=str)
+    selected_segments = st.sidebar.multiselect(
+        "Select customer segments",
+        options=segment_values,
+        default=segment_values
+    )
+    filtered = df[df[segment_column].isin(selected_segments)].copy()
+else:
+    filtered = df.copy()
+
+# KPI cards
+c1, c2, c3 = st.columns(3)
+c1.metric("Total Customers", f"{len(filtered):,}")
+
+if "SpendingScore" in filtered.columns:
+    c2.metric(
+        "Average Spending Score",
+        f"{filtered['SpendingScore'].mean():.1f}"
+    )
+else:
+    c2.metric("Average Spending Score", "N/A")
+
+if "AnnualIncome" in filtered.columns:
+    c3.metric(
+        "Average Annual Income",
+        f"{filtered['AnnualIncome'].mean():,.1f}"
+    )
+else:
+    c3.metric("Average Annual Income", "N/A")
+
 st.divider()
-st.caption('Built with Streamlit, Pandas and Plotly. Cluster numbers are labels, not rankings. Income units follow the supplied dataset.')
+
+# Charts
+if segment_column:
+    st.subheader("Customer Segment Distribution")
+    counts = filtered[segment_column].value_counts().reset_index()
+    counts.columns = ["Segment", "Customers"]
+    fig = px.bar(
+        counts,
+        x="Segment",
+        y="Customers",
+        color="Segment",
+        title="Number of Customers in Each Segment"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+left, right = st.columns(2)
+
+with left:
+    if "AnnualIncome" in filtered.columns and "SpendingScore" in filtered.columns:
+        st.subheader("Income vs Spending")
+        color_col = segment_column if segment_column else None
+        fig = px.scatter(
+            filtered,
+            x="AnnualIncome",
+            y="SpendingScore",
+            color=color_col,
+            hover_data=[
+                col for col in ["CustomerID", "Age", "AnnualPurchases"]
+                if col in filtered.columns
+            ],
+            title="Customer Income and Spending Patterns"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    elif "Age" in filtered.columns:
+        st.subheader("Customer Age Distribution")
+        fig = px.histogram(filtered, x="Age", title="Age Distribution")
+        st.plotly_chart(fig, use_container_width=True)
+
+with right:
+    if "Age" in filtered.columns:
+        st.subheader("Age Distribution")
+        fig = px.histogram(
+            filtered,
+            x="Age",
+            color=segment_column if segment_column else None,
+            title="Customer Ages"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    elif "AnnualPurchases" in filtered.columns:
+        st.subheader("Annual Purchases")
+        fig = px.histogram(
+            filtered,
+            x="AnnualPurchases",
+            title="Annual Purchases Distribution"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+# Segment summary table
+if summary is not None:
+    st.subheader("Segment Summary")
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+# Data preview and download
+with st.expander("View customer data"):
+    st.dataframe(filtered, use_container_width=True, hide_index=True)
+
+st.download_button(
+    "Download filtered customer data",
+    data=filtered.to_csv(index=False).encode("utf-8"),
+    file_name="filtered_customer_segments.csv",
+    mime="text/csv"
+)
+
+st.success("Customer Segmentation Dashboard loaded successfully.")
